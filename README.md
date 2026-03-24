@@ -4,20 +4,15 @@
 
 # agent-notifier
 
-**Notification dispatch for agent events for LLM agents. Zero external dependencies.**
+**Notification dispatch for agent events: webhooks, digests, routers.**
 
-[![PyPI](https://img.shields.io/pypi/v/agent-notifier?color=blue)](https://pypi.org/project/agent-notifier/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Zero deps](https://img.shields.io/badge/dependencies-zero-brightgreen)](pyproject.toml)
+[![PyPI version](https://img.shields.io/pypi/v/agent-notifier?color=purple&style=flat-square)](https://pypi.org/project/agent-notifier/) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://python.org) [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE) [![Tests](https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square)](#)
 
 ---
 
 ## The Problem
 
-Production LLM agents fail silently. Without notification dispatch for agent events, you get undefined behaviour at scale — race conditions, lost state, cascading failures, and no way to debug what went wrong.
-
-`agent-notifier` gives you a production-ready notification dispatch for agent events primitive with a clean API, tested edge cases, and zero configuration.
+Without a notifier, important agent events — failures, completions, anomalies — are lost unless someone is watching the logs. Silent failures cost time; good alerts save it.
 
 ## Installation
 
@@ -25,88 +20,108 @@ Production LLM agents fail silently. Without notification dispatch for agent eve
 pip install agent-notifier
 ```
 
-Or from source:
-
-```bash
-git clone https://github.com/darshjme/agent-notifier.git
-cd agent-notifier
-pip install -e .
-```
-
 ## Quick Start
 
 ```python
-from agent_notifier import *  # see API reference below
+from agent_notifier import DigestNotifier, Notifier, NotifierProtocol
 
-# See examples/ directory for complete working examples
+# Initialise
+instance = DigestNotifier(name="my_agent")
+
+# Use
+result = instance.run()
+print(result)
 ```
 
 ## API Reference
 
-The main classes and functions are defined in `agent_notifier/__init__.py`.
+### `DigestNotifier`
 
-Key exports: `Webhook · digest · routing · in-process callbacks`
+```python
+class DigestNotifier:
+    """Batches notifications; delivers them when :meth:`flush` is called.
+    def __init__(self, flush_size: int = 10) -> None:
+    def pending_count(self) -> int:
+        """Number of buffered but un-flushed notifications."""
+    def notify(self, event: str, data: dict[str, Any] | None = None) -> None:
+        """Buffer *event* + *data*.
+    def flush(self) -> list[dict[str, Any]]:
+        """Return all buffered notifications and clear the buffer."""
+```
 
-All classes follow a consistent interface:
-- Instantiate with sensible defaults
-- Compose with other arsenal libraries
-- Zero external dependencies required
+### `Notifier`
 
-See the source code and `tests/` directory for verified usage examples.
+```python
+class Notifier:
+    """Base notification dispatcher.
+    def __init__(self, name: str) -> None:
+    def subscribe(self, event: str, handler: Callable) -> None:
+        """Register *handler* for *event*."""
+    def unsubscribe(self, event: str, handler: Callable) -> None:
+        """Remove *handler* from *event*.  No-op if not registered."""
+    def notify(self, event: str, data: dict | None = None) -> None:
+        """Fire all handlers registered for *event*."""
+```
+
+### `NotifierProtocol`
+
+```python
+class NotifierProtocol(Protocol):
+    """Anything with a ``notify(event, data)`` method qualifies."""
+    def notify(self, event: str, data: dict | None = None) -> None: ...  # noqa: E704
+```
+
+### `NotificationRouter`
+
+```python
+class NotificationRouter:
+    """Routes events to notifiers based on glob patterns.
+    def __init__(self) -> None:
+    def register(self, event_pattern: str, notifier: NotifierProtocol) -> None:
+        """Map *event_pattern* (glob) to *notifier*.
+    def dispatch(self, event: str, data: dict[str, Any] | None = None) -> None:
+        """Send *event* to every notifier whose pattern matches."""
+```
+
 
 ## How It Works
 
+### Flow
+
 ```mermaid
 flowchart LR
-    A[Agent Task] --> B[agent-notifier]
-    B --> C{Decision}
-    C -->|success| D[✅ Result]
-    C -->|failure| E[⚠️ Handle]
-    E --> B
-
-    style B fill:#161b22,stroke:#1f6feb,stroke-width:2,color:#1f6feb
-    style D fill:#1a3320,stroke:#238636,color:#3fb950
-    style E fill:#3d1a1a,stroke:#f85149,color:#f85149
+    A[User Code] -->|create| B[DigestNotifier]
+    B -->|configure| C[Notifier]
+    C -->|execute| D{Success?}
+    D -->|yes| E[Return Result]
+    D -->|no| F[Error Handler]
+    F --> G[Fallback / Retry]
+    G --> C
 ```
+
+### Sequence
 
 ```mermaid
 sequenceDiagram
-    participant Agent
-    participant AgentNotifier as agent-notifier
-    participant Output
+    participant App
+    participant DigestNotifier
+    participant Notifier
 
-    Agent->>AgentNotifier: initialize()
-    AgentNotifier-->>Agent: ready
-
-    loop Agent Run
-        Agent->>AgentNotifier: process(input)
-        AgentNotifier-->>Agent: result
-    end
-
-    Agent->>Output: deliver(result)
+    App->>+DigestNotifier: initialise()
+    DigestNotifier->>+Notifier: configure()
+    Notifier-->>-DigestNotifier: ready
+    App->>+DigestNotifier: run(context)
+    DigestNotifier->>+Notifier: execute(context)
+    Notifier-->>-DigestNotifier: result
+    DigestNotifier-->>-App: WorkflowResult
 ```
 
 ## Philosophy
 
-The divine messenger Narada carried news across the three worlds. agent-notifier carries yours.
+> *Dūta* — the divine messenger — is the original notification system; alerts carry dharma across distances.
 
 ---
 
-## Part of the Arsenal
-
-`agent-notifier` is one of six production libraries for LLM agents:
-
-| Library | Purpose |
-|---------|---------|
-| [herald](https://github.com/darshjme/herald) | Semantic task routing |
-| [engram](https://github.com/darshjme/engram) | Agent memory |
-| [sentinel](https://github.com/darshjme/sentinel) | ReAct loop guards |
-| [verdict](https://github.com/darshjme/verdict) | Agent evaluation |
-| [agent-guardrails](https://github.com/darshjme/agent-guardrails) | Output validation |
-| [agent-observability](https://github.com/darshjme/agent-observability) | Tracing & metrics |
-
-→ [arsenal](https://github.com/darshjme/arsenal) — the complete stack
-
----
+*Part of the [arsenal](https://github.com/darshjme/arsenal) — production stack for LLM agents.*
 
 *Built by [Darshankumar Joshi](https://github.com/darshjme), Gujarat, India.*
